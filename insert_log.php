@@ -9,15 +9,14 @@ if ($mysqli->connect_errno) {
     die("Connection failed: " . $mysqli->connect_error);
 }
 
-// --- Handle ESP32 POST request ---
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
-    header('Content-Type: text/plain'); // ESP32 only needs plain text
+    header('Content-Type: text/plain');
     $rfid_raw = isset($_POST['rfid_data']) ? $_POST['rfid_data'] : null;
 
     if ($rfid_raw) {
         $rfid_upper = strtoupper(trim($rfid_raw));
 
-        // Check if RFID exists in rfid_reg
+        // Check if RFID exists
         $stmt = $mysqli->prepare("SELECT rfid_status FROM rfid_reg WHERE UPPER(rfid_data) = ? LIMIT 1");
         $stmt->bind_param('s', $rfid_upper);
         $stmt->execute();
@@ -25,21 +24,30 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
         if ($res && $res->num_rows > 0) {
             $row = $res->fetch_assoc();
-            $status = (int)$row['rfid_status'];
+            $current_status = (int)$row['rfid_status'];
 
-            // Insert into rfid_logs
+            // Toggle state: 0 -> 1, 1 -> 0
+            $new_status = ($current_status == 1) ? 0 : 1;
+
+            // Update new state in rfid_reg
+            $update = $mysqli->prepare("UPDATE rfid_reg SET rfid_status = ? WHERE UPPER(rfid_data) = ?");
+            $update->bind_param('is', $new_status, $rfid_upper);
+            $update->execute();
+            $update->close();
+
+            // Log every state transition
             $insert = $mysqli->prepare("
                 INSERT INTO rfid_logs (time_log, time_log_12, rfid_data, rfid_status)
                 VALUES (NOW(), DATE_FORMAT(NOW(), '%Y-%m-%d %h:%i:%s %p'), ?, ?)
             ");
-            $insert->bind_param('si', $rfid_upper, $status);
+            $insert->bind_param('si', $rfid_upper, $new_status);
             $insert->execute();
             $insert->close();
 
-            echo ($status === 1) ? "VALID" : "INACTIVE";
+            echo ($new_status == 1) ? "ACTIVE" : "INACTIVE";
 
         } else {
-            // Not found in rfid_reg → mark with -1
+            // Unregistered RFID
             $status = -1;
             $insert = $mysqli->prepare("
                 INSERT INTO rfid_logs (time_log, time_log_12, rfid_data, rfid_status)
@@ -51,18 +59,21 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
             echo "NOT_FOUND";
         }
+
         $stmt->close();
     } else {
         echo "NO_DATA";
     }
+
     $mysqli->close();
-    exit; // prevent HTML output for ESP32
+    exit;
 }
 ?>
 
 <!DOCTYPE html>
 <html>
 <head>
+    <meta http-equiv="refresh" content="1">
     <title>RFID Logs</title>
     <style>
         body { font-family: Arial, sans-serif; margin: 20px; }
@@ -71,7 +82,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
         th { background-color: #333; color: white; }
         tr:nth-child(even) { background-color: #f2f2f2; }
         tr:hover { background-color: #ddd; }
-        .valid { color: green; font-weight: bold; }
+        .active { color: green; font-weight: bold; }
         .inactive { color: red; font-weight: bold; }
         .notfound { color: orange; font-weight: bold; }
     </style>
@@ -86,7 +97,6 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
             <th>Status</th>
         </tr>
         <?php
-        // Fetch logs for browser view
         $result = $mysqli->query("SELECT * FROM rfid_logs ORDER BY time_log DESC LIMIT 50");
         if ($result && $result->num_rows > 0) {
             while ($row = $result->fetch_assoc()) {
@@ -94,7 +104,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                 $statusClass = "";
                 if ($row['rfid_status'] == 1) {
                     $statusText = "ACTIVE";
-                    $statusClass = "valid";
+                    $statusClass = "active";
                 } elseif ($row['rfid_status'] == 0) {
                     $statusText = "INACTIVE";
                     $statusClass = "inactive";
@@ -110,7 +120,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                       </tr>";
             }
         } else {
-            echo "<tr><td colspan='5'>No logs found</td></tr>";
+            echo "<tr><td colspan='4'>No logs found</td></tr>";
         }
         $mysqli->close();
         ?>
