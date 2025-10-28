@@ -85,3 +85,5 @@ Summary
 - The PHP script stores and displays logs using MySQL.
 - Each RFID scan alternates between active and inactive state.
 - The dashboard now automatically refreshes every 1 second to show new logs in real time.
+
+-
